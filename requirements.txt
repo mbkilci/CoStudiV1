@@ -1,0 +1,6 @@
+fastapi
+uvicorn
+python-multipart
+Pillow
+pdf2docx
+pymupdf==1.23.26
