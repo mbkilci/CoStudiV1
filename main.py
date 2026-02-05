@@ -11,6 +11,11 @@ from pypdf import PdfWriter, PdfReader
 import io
 import os
 from fastapi.responses import StreamingResponse, JSONResponse
+# --- HEALTH CHECK (RENDER İÇİN ŞART) ---
+@app.get("/")
+def read_root():
+    return {"message": "CoStudi API is running!"}
+
 def get_libreoffice_command():
     # İşletim sistemini kontrol et
     if platform.system() == "Darwin": # macOS
