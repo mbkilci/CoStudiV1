@@ -86,7 +86,7 @@ async def process_image(
     except Exception as e:
         return JSONResponse(status_code=500, content={"error": str(e)})
 
-# --- AKILLI BİRLEŞTİRME (PDF + RESİM + OFFICE) ---
+# --- 2. AKILLI BİRLEŞTİRME (OPTIMIZE EDİLMİŞ) ---
 @app.post("/pdf-merge/")
 async def merge_pdfs(files: List[UploadFile] = File(...)):
     try:
@@ -96,66 +96,62 @@ async def merge_pdfs(files: List[UploadFile] = File(...)):
         for file in files:
             filename = file.filename.lower()
             file_content = await file.read()
-            file_buffer = io.BytesIO(file_content)
+            
+            # Dosyayı diske yaz (RAM tasarrufu için)
+            ext = os.path.splitext(filename)[1]
+            if not ext: ext = ".pdf"
+            
+            with tempfile.NamedTemporaryFile(delete=False, suffix=ext) as tmp_file:
+                tmp_file.write(file_content)
+                tmp_path = tmp_file.name
+                temp_files_to_clean.append(tmp_path)
 
-            # 1. DURUM: OFFICE DOSYASI (DOCX / PPTX)
+            # 1. DURUM: OFFICE DOSYASI
             if filename.endswith(('.docx', '.pptx', '.doc', '.ppt')):
-                ext = os.path.splitext(filename)[1]
-                with tempfile.NamedTemporaryFile(delete=False, suffix=ext) as tmp_office:
-                    tmp_office.write(file_content)
-                    tmp_office_path = tmp_office.name
-                    temp_files_to_clean.append(tmp_office_path)
-
                 output_dir = tempfile.mkdtemp()
                 temp_files_to_clean.append(output_dir)
 
                 soffice_path = get_libreoffice_command()
                 if os.path.exists(soffice_path):
                     subprocess.run([
-                        soffice_path, 
-                        '--headless', 
-                        '--convert-to', 'pdf', 
-                        '--outdir', output_dir, 
-                        tmp_office_path
+                        soffice_path, '--headless', '--convert-to', 'pdf', 
+                        '--outdir', output_dir, tmp_path
                     ], check=True)
                     
-                    filename_no_ext = os.path.splitext(os.path.basename(tmp_office_path))[0]
-                    converted_pdf_path = os.path.join(output_dir, f"{filename_no_ext}.pdf")
+                    converted_filename = os.path.splitext(os.path.basename(tmp_path))[0] + ".pdf"
+                    converted_pdf_path = os.path.join(output_dir, converted_filename)
                     
                     if os.path.exists(converted_pdf_path):
-                        merger.append(PdfReader(converted_pdf_path))
+                        merger.append(converted_pdf_path)
                         temp_files_to_clean.append(converted_pdf_path)
                 else:
                     print("LibreOffice bulunamadı.")
 
-            # 2. DURUM: RESİM (JPG / PNG)
+            # 2. DURUM: RESİM
             elif filename.endswith(('.png', '.jpg', '.jpeg', '.webp')):
-                image = Image.open(file_buffer)
-                if image.mode == "RGBA":
-                    image = image.convert("RGB")
-                
-                img_pdf_buffer = io.BytesIO()
-                image.save(img_pdf_buffer, format="PDF")
-                img_pdf_buffer.seek(0)
-                merger.append(PdfReader(img_pdf_buffer))
+                image = Image.open(tmp_path)
+                if image.mode == "RGBA": image = image.convert("RGB")
+                # Resmi PDF yapıp geçici bir yere kaydet
+                img_pdf_path = tmp_path + ".pdf"
+                image.save(img_pdf_path, "PDF", resolution=72.0) # Düşük DPI ile hız kazan
+                merger.append(img_pdf_path)
+                temp_files_to_clean.append(img_pdf_path)
 
             # 3. DURUM: ZATEN PDF
             else:
-                merger.append(PdfReader(file_buffer))
+                merger.append(tmp_path)
 
         output_buffer = io.BytesIO()
         merger.write(output_buffer)
         merger.close()
         output_buffer.seek(0)
 
+        # Temizlik
         for path in temp_files_to_clean:
             try:
-                if os.path.isdir(path):
-                    shutil.rmtree(path, ignore_errors=True)
-                elif os.path.isfile(path):
-                    os.remove(path)
-            except:
-                pass
+                if os.path.isdir(path): shutil.rmtree(path, ignore_errors=True)
+                elif os.path.isfile(path): os.remove(path)
+            except: pass
 
         return StreamingResponse(
             output_buffer, 
